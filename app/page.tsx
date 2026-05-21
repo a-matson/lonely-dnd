@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from "react";
 import * as webllm from "@mlc-ai/web-llm";
-import { addDocument, searchDocuments } from "../lib/rag";
+import { addDocument, generateHyDE, getEmbedding, searchDocumentsHybrid } from "../lib/rag";
 import { getSlidingWindow, summarizeOldMessages, MAX_CONTEXT_TOKENS } from "../lib/budget";
 
 export type Message = { role: "user" | "assistant" | "system"; content: string };
@@ -72,16 +72,27 @@ export default function WebLLMChat() {
     const userText = prompt;
     setPrompt("");
 
-    // Retrieval (RAG)
-    setStatus("Searching knowledge base...");
-    const retrievedDocs = await searchDocuments(userText, 3);
-    const contextStr = retrievedDocs.map(d => d.text).join("\n\n");
+    // HyDE query transformation
+    setStatus("Thinking about the query (HyDE)...");
+    let searchEmbedding: number[];
+    try {
+      const hypotheticalAnswer = await generateHyDE(engineRef.current, userText);
+      searchEmbedding = await getEmbedding(hypotheticalAnswer);
+    } catch (e) {
+      console.warn("HyDE failed, falling back to raw query embedding", e);
+      searchEmbedding = await getEmbedding(userText);
+    }
+
+    // hybrid retrieval (RAG)
+    setStatus("Searching knowledge base (Hybrid Search)...");
+    const retrievedDocs = await searchDocumentsHybrid(userText, searchEmbedding, 4);
     
-    // Token Budgeting = MAX_CONTEXT_TOKENS - RAG - system - summary
+    // Token budgeting = MAX_CONTEXT_TOKENS - RAG - system - summary
     const historyBudget = MAX_CONTEXT_TOKENS - 1000 - 200 - 500;
     const windowMessages = getSlidingWindow(messages, historyBudget);
+
+    const contextStr = retrievedDocs.map((d, idx) => `[Source Chunk ${idx + 1}]:\n${d.text}`).join("\n\n");
     
-    // Check if we have "overflow" messages to summarise
     const overflowMessages = messages.slice(0, messages.length - windowMessages.length);
     if (overflowMessages.length > 0) {
       summarizeOldMessages(engineRef.current, overflowMessages, conversationSummary)
