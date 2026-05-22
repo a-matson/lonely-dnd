@@ -26,6 +26,10 @@ const MODELS = [
     value: "Phi-3-mini-4k-instruct-q4f16_1-MLC",
   },
   {
+    label: "Llama 3.2 1B (Better Tool Use)",
+    value: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+  },
+  {
     label: "Gemma 2B (balanced)",
     value: "gemma-2-2b-it-q4f16_1-MLC",
   },
