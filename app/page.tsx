@@ -6,15 +6,17 @@ import { getSlidingWindow, MAX_CONTEXT_TOKENS } from "../lib/budget";
 import {
   archiveToEpisodicMemory,
   extractAndStoreFacts,
+  getCurrentGameState,
   retrieveRelevantMemory,
+  saveGameState,
 } from "../lib/memory";
 import {
   addDocument,
+  type DocumentType,
   extractEntitiesAndIntent,
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
-import { DocumentType } from "../lib/rag";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -29,14 +31,6 @@ const MODELS = [
   {
     label: "Llama 3.2 1B (Great for Logic)",
     value: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
-  },
-  {
-    label: "Gemma 2B (Balanced)",
-    value: "gemma-2-2b-it-q4f16_1-MLC",
-  },
-  {
-    label: "SmolLM2 1.7B (Small & Fast)",
-    value: "SmolLM2-1.7B-Instruct-q4f16_1-MLC",
   },
 ];
 
@@ -54,23 +48,18 @@ export default function WebLLMChat() {
 
   async function initDualEngines(logicId: string, storyId: string) {
     setLoading(true);
-    setStatus("Loading dual engines (Warning: Requires ~4GB+ VRAM)...");
-
+    setStatus("Loading dual engines...");
     try {
-      setStatus(`Loading Logic Engine (${logicId})...`);
       logicEngineRef.current = await webllm.CreateMLCEngine(logicId, {
         initProgressCallback: (p) => setStatus(`Logic Engine: ${p.text}`),
       });
-
-      setStatus(`Loading Story Engine (${storyId})...`);
       storyEngineRef.current = await webllm.CreateMLCEngine(storyId, {
         initProgressCallback: (p) => setStatus(`Story Engine: ${p.text}`),
       });
-
       setStatus("Both engines ready! Roll for initiative.");
     } catch (err) {
       console.error(err);
-      setStatus("Failed to load one or both models. Check VRAM capacity.");
+      setStatus("Failed to load engines.");
     } finally {
       setLoading(false);
     }
@@ -82,28 +71,34 @@ export default function WebLLMChat() {
   }, []);
 
   async function handleAddKnowledge() {
-    const text = window.prompt("Paste campaign lore, rules, or world-building text:");
+    const text = window.prompt(
+      "Paste campaign lore, rules, or world-building text:",
+    );
     if (!text) return;
 
     const typeInput = window.prompt(
-      "Is this a strict rule constraint, or general lore?\nType 'rule', 'lore', 'npc', or 'location'", 
-      "lore"
+      "Is this a strict rule constraint, or general lore?\nType 'rule', 'lore', 'npc', or 'location'",
+      "lore",
     );
-    
-    const validTypes = ["rule", "lore", "npc", "location"];
-      const docType: DocumentType = validTypes.includes(typeInput?.toLowerCase() || "") 
-        ? (typeInput?.toLowerCase() as DocumentType) 
-        : "lore";
 
-      setStatus(`Adding ${docType} to vector DB...`);
-      try {
-        await addDocument(text, docType);
-        setStatus(`${docType.charAt(0).toUpperCase() + docType.slice(1)} added! Engines ready.`);
-      } catch (err) {
-        console.error(err);
-        setStatus("Failed to add knowledge");
-      }
+    const validTypes = ["rule", "lore", "npc", "location"];
+    const docType: DocumentType = validTypes.includes(
+      typeInput?.toLowerCase() || "",
+    )
+      ? (typeInput?.toLowerCase() as DocumentType)
+      : "lore";
+
+    setStatus(`Adding ${docType} to vector DB...`);
+    try {
+      await addDocument(text, docType);
+      setStatus(
+        `${docType.charAt(0).toUpperCase() + docType.slice(1)} added! Engines ready.`,
+      );
+    } catch (err) {
+      console.error(err);
+      setStatus("Failed to add knowledge");
     }
+  }
 
   async function sendMessage() {
     if (!logicEngineRef.current || !storyEngineRef.current || !prompt.trim())
@@ -118,25 +113,28 @@ export default function WebLLMChat() {
 
     await extractAndStoreFacts(logicEngineRef.current, userText);
 
-    setStatus("Analyzing intent and entities...");
+    setStatus("Analyzing intent...");
     let extractedData = { action: "", targets: [] as string[] };
-    
     try {
-      extractedData = await extractEntitiesAndIntent(logicEngineRef.current, userText);
+      extractedData = await extractEntitiesAndIntent(
+        logicEngineRef.current,
+        userText,
+      );
       console.log("Extracted Intent:", extractedData);
     } catch {
       console.warn("Extraction failed, proceeding with raw query");
     }
 
     const searchEmbedding = await getEmbedding(userText);
-    
     const keywordQuery = [
-      extractedData.action, 
-      ...extractedData.targets, 
-      userText
+      extractedData.action,
+      ...extractedData.targets,
+      userText,
     ].join(" ");
-    
-    setStatus("Searching campaign lore and memories...");
+
+    const currentState = await getCurrentGameState();
+
+    setStatus("Searching campaign lore...");
     const [retrievedDocs, relevantMemories] = await Promise.all([
       searchDocumentsHybrid(keywordQuery, searchEmbedding, 3),
       retrieveRelevantMemory(searchEmbedding, 3),
@@ -154,23 +152,70 @@ export default function WebLLMChat() {
     }
 
     const memoryContext = `
+    [CURRENT GAME STATE]:
+    ${JSON.stringify(currentState, null, 2)}
+
     [Character Sheet / Known Facts]:
     ${relevantMemories.semantic.length ? relevantMemories.semantic.map((f) => `- ${f.text}`).join("\n") : "None relevant."}
 
     [Past Events / Episodic Memory]:
     ${relevantMemories.episodic.length ? relevantMemories.episodic.map((e) => `...\n${e.text}\n...`).join("\n") : "None relevant."}
 
-    [Campaign Lore / RAG]:
-    ${retrievedDocs.length ? retrievedDocs.map((d, i) => `Lore Chunk ${i + 1}:\n${d.text}`).join("\n\n") : "None relevant."}
+    [Campaign Lore / Rules]:
+    ${retrievedDocs.length ? retrievedDocs.map((d, i) => `Chunk ${i + 1}:\n${d.text}`).join("\n\n") : "None relevant."}
     `;
 
-    setStatus("Logic Engine is computing the outcome...");
+    setStatus("Logic Engine is computing outcome and updating game state...");
     let logicOutcome = "";
+
+    const logicSchema = {
+      type: "object",
+      properties: {
+        logic_outcome: {
+          type: "string",
+          description:
+            "Brief bullet points of what logically happens based on the rules and current state.",
+        },
+        new_game_state: {
+          type: "object",
+          properties: {
+            location: { type: "string" },
+            time_and_weather: { type: "string" },
+            npcs: {
+              type: "array",
+              items: {
+                type: "object",
+                properties: {
+                  name: { type: "string" },
+                  state: {
+                    type: "string",
+                    description: "e.g., Healthy, Injured, Dead, Hidden",
+                  },
+                  mood: {
+                    type: "string",
+                    description: "e.g., Hostile, Terrified, Friendly",
+                  },
+                  current_action: {
+                    type: "string",
+                    description: "What the NPC is doing right now",
+                  },
+                },
+                required: ["name", "state", "mood", "current_action"],
+              },
+            },
+          },
+          required: ["location", "npcs"],
+        },
+      },
+      required: ["logic_outcome", "new_game_state"],
+    };
+
     try {
       const logicPrompt = `
       You are the Dungeon Master's Logic Engine. 
-      Analyze the player's action based on the context. 
-      Determine if it succeeds, fails, or triggers a consequence. Keep your output to a brief, factual bulleted list of state changes. DO NOT write a story.
+      Analyze the player's action based on the [CURRENT GAME STATE] and [Campaign Lore / Rules].
+      1. Determine if the action succeeds or fails.
+      2. Update the game state (NPC moods, states, actions, location) reflecting the result of this turn.
       
       Context: ${memoryContext}
       Player Action: ${userText}
@@ -182,47 +227,59 @@ export default function WebLLMChat() {
             {
               role: "system",
               content:
-                "You strictly output game mechanics and logical consequences.",
+                "You strictly output JSON representing game mechanics and state changes. DO NOT write a story.",
             },
             { role: "user", content: logicPrompt },
           ],
           temperature: 0.1,
+          response_format: {
+            type: "json_object",
+            schema: JSON.stringify(logicSchema),
+          },
         });
-      logicOutcome =
-        logicResponse.choices[0].message.content ||
-        "The action resolves neutrally.";
 
-      console.log("LOGIC ENGINE COMPUTATION:", logicOutcome);
+      const parsedLogic = JSON.parse(
+        logicResponse.choices[0].message.content || "{}",
+      );
+      logicOutcome =
+        parsedLogic.logic_outcome || "The action resolves neutrally.";
+
+      if (parsedLogic.new_game_state) {
+        await saveGameState(parsedLogic.new_game_state);
+        console.log("Game State Updated:", parsedLogic.new_game_state);
+      }
     } catch (err) {
-      console.error(err);
-      setStatus("Logic Engine failed.");
-      return;
+      console.error("Logic Engine failed:", err);
+      logicOutcome = "The action resolves, but state update failed.";
     }
 
     setStatus("Story Engine is narrating...");
     try {
+      const freshestState = await getCurrentGameState();
       const storyPrompt = `
-      Context: ${memoryContext}
+      Context & Lore: ${memoryContext}
+      Current World State: ${JSON.stringify(freshestState)}
       Player Action: ${userText}
       Logical Outcome determined by the DM: ${logicOutcome}
 
-      Using the Logical Outcome as your strict guide, write a highly descriptive, immersive paragraph narrating what happens next in the D&D campaign. Describe the environment, the action, and the result. Address the player in the second person ("You...").
+      Using the Logical Outcome and Current World State as your strict guide, write a highly descriptive, immersive paragraph narrating what happens in the campaign. Describe the environment, the NPC's moods/actions, and the result. Address the player in the second person ("You...").
       `;
 
-      const storySystemMessage: webllm.ChatCompletionMessageParam = {
-        role: "system",
-        content:
-          "You are the creative, descriptive Narrator of a D&D game. You bring the world to life with rich sensory details.",
-      };
-
-      const payloadMessages = [
-        storySystemMessage,
-        ...windowMessages.slice(0, -1),
-        { role: "user", content: storyPrompt },
-      ] as webllm.ChatCompletionMessageParam[];
+      const windowMessages = getSlidingWindow(
+        messages.slice(0, -1),
+        MAX_CONTEXT_TOKENS - 1500,
+      );
 
       const stream = await storyEngineRef.current.chat.completions.create({
-        messages: payloadMessages,
+        messages: [
+          {
+            role: "system",
+            content:
+              "You are the creative, descriptive Narrator of a D&D game.",
+          },
+          ...windowMessages,
+          { role: "user", content: storyPrompt },
+        ],
         stream: true,
         temperature: 0.7,
       });

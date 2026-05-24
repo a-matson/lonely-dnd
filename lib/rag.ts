@@ -67,7 +67,7 @@ export interface RAGChunk {
 
 const miniSearch = new MiniSearch<RAGChunk>({
   fields: ["text"],
-  storeFields: ["id", "text", "parentId", "type"], 
+  storeFields: ["id", "text", "parentId", "type"],
 });
 
 export async function initDB(): Promise<IDBPDatabase> {
@@ -109,7 +109,6 @@ export async function addDocument(text: string, type: DocumentType = "lore") {
 
     await db.put("chunks", docChunk);
 
-    // Add to keyword index
     if (!miniSearch.has(docChunk.id)) {
       miniSearch.add(docChunk);
     }
@@ -148,7 +147,9 @@ export async function extractEntitiesAndIntent(
     });
 
     const resultStr = response.choices[0].message.content;
-    const parsed = JSON.parse(resultStr || '{"action": "unknown", "targets": []}');
+    const parsed = JSON.parse(
+      resultStr || '{"action": "unknown", "targets": []}',
+    );
     return parsed;
   } catch (e) {
     console.warn("Entity extraction failed, falling back to empty targets", e);
@@ -190,10 +191,12 @@ export async function searchDocumentsHybrid(
     fusionScores[item.id].score += 1 / (k + index + 1);
   });
 
-  const sortedResults = Object.values(fusionScores).sort((a, b) => b.score - a.score);
-  
-  const rules = sortedResults.filter(r => r.chunk.type === "rule");
-  const lore = sortedResults.filter(r => r.chunk.type !== "rule");
+  const sortedResults = Object.values(fusionScores).sort(
+    (a, b) => b.score - a.score,
+  );
+
+  const rules = sortedResults.filter((r) => r.chunk.type === "rule");
+  const lore = sortedResults.filter((r) => r.chunk.type !== "rule");
 
   const finalRules = rules.slice(0, 1);
   const finalLore = lore.slice(0, topK - finalRules.length);

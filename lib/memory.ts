@@ -11,6 +11,20 @@ export interface MemoryChunk {
   timestamp: number;
 }
 
+export interface NPCState {
+  name: string;
+  state: string;
+  mood: string;
+  current_action: string;
+}
+
+export interface GameState {
+  id: string;
+  location: string;
+  time_and_weather: string;
+  npcs: NPCState[];
+}
+
 // multi-tiered db
 export async function initMemoryDB(): Promise<IDBPDatabase> {
   return await openDB("webllm-memory-db", 1, {
@@ -21,15 +35,36 @@ export async function initMemoryDB(): Promise<IDBPDatabase> {
       if (!db.objectStoreNames.contains("semantic")) {
         db.createObjectStore("semantic", { keyPath: "id" });
       }
+      if (!db.objectStoreNames.contains("gameState")) {
+        db.createObjectStore("gameState", { keyPath: "id" });
+      }
     },
   });
+}
+
+export async function getCurrentGameState(): Promise<GameState> {
+  const db = await initMemoryDB();
+  const state = await db.get("gameState", "current-state");
+
+  if (!state) {
+    return {
+      id: "current-state",
+      location: "Unknown Location",
+      time_and_weather: "Clear",
+      npcs: [],
+    };
+  }
+  return state;
+}
+
+export async function saveGameState(newState: Omit<GameState, "id">) {
+  const db = await initMemoryDB();
+  await db.put("gameState", { id: "current-state", ...newState });
 }
 
 // episodic memory
 export async function archiveToEpisodicMemory(messages: Message[]) {
   const db = await initMemoryDB();
-
-  // group user-assistant pairs to maintain context
   const textToArchive = messages
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n");
@@ -52,7 +87,6 @@ export async function extractAndStoreFacts(
 ) {
   const db = await initMemoryDB();
 
-  // use LLM to extract facts in a structured format
   const prompt = `
     Analyze the following user message and extract any concrete facts, personal preferences, or entities mentioned about the user. 
     Format the output strictly as a JSON object with a single key "facts" containing an array of strings. 
@@ -139,17 +173,17 @@ export async function retrieveRelevantMemory(
   const episodicScores = episodic
     .map((chunk) => {
       const ageInHours = (now - chunk.timestamp) / (1000 * 60 * 60);
-      
+
       // Time decay factor: newer memories stay close to a 1.0 multiplier.
       // Older memories slowly decay down to a minimum of 0.5.
-      const timeDecay = Math.max(0.5, 1 - (ageInHours * 0.05)); 
-      
+      const timeDecay = Math.max(0.5, 1 - ageInHours * 0.05);
+
       const semanticScore = cosineSimilarity(queryEmbedding, chunk.embedding);
 
       return {
         ...chunk,
         type: "episodic",
-        score: semanticScore * timeDecay, 
+        score: semanticScore * timeDecay,
       };
     })
     .sort((a, b) => b.score - a.score)
