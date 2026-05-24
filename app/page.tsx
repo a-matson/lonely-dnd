@@ -24,13 +24,28 @@ export type Message = {
 };
 
 const MODELS = [
+  // --- STORY ENGINES (Creative) ---
   {
-    label: "Phi-3 Mini (Great for Story)",
-    value: "Phi-3-mini-4k-instruct-q4f16_1-MLC",
+    label: "Mistral 7B (Best for Story - High VRAM)",
+    value: "Mistral-7B-Instruct-v0.3-q4f16_1-MLC",
   },
   {
-    label: "Llama 3.2 1B (Great for Logic)",
-    value: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
+    label: "Phi-3.5 Mini (Great for Story - Low VRAM)",
+    value: "Phi-3.5-mini-instruct-q4f16_1-MLC",
+  },
+
+  // LOGIC ENGINES
+  {
+    label: "Qwen 2.5 3B (Best for Logic)",
+    value: "Qwen2.5-3B-Instruct-q4f16_1-MLC",
+  },
+  {
+    label: "Qwen 2.5 1.5B (Good for Logic - Low VRAM)",
+    value: "Qwen2.5-1.5B-Instruct-q4f16_1-MLC",
+  },
+  {
+    label: "Llama 3.2 3B (Balanced Logic)",
+    value: "Llama-3.2-3B-Instruct-q4f16_1-MLC",
   },
 ];
 
@@ -38,8 +53,8 @@ export default function WebLLMChat() {
   const logicEngineRef = useRef<webllm.MLCEngineInterface | null>(null);
   const storyEngineRef = useRef<webllm.MLCEngineInterface | null>(null);
 
-  const [logicModel, setLogicModel] = useState(MODELS[1].value);
-  const [storyModel, setStoryModel] = useState(MODELS[0].value);
+  const [logicModel, setLogicModel] = useState(MODELS[3].value);
+  const [storyModel, setStoryModel] = useState(MODELS[1].value);
 
   const [loading, setLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
@@ -111,8 +126,6 @@ export default function WebLLMChat() {
     const newMessages = [...messages, displayMessage];
     setMessages([...newMessages, { role: "assistant", content: "" }]);
 
-    await extractAndStoreFacts(logicEngineRef.current, userText);
-
     setStatus("Analyzing intent...");
     let extractedData = { action: "", targets: [] as string[] };
     try {
@@ -174,11 +187,13 @@ export default function WebLLMChat() {
         identified_constraints: {
           type: "array",
           items: { type: "string" },
-          description: "Step 1: List any specific rules, physical boundaries, or NPC states from the context that restrict or affect this action."
+          description:
+            "Step 1: List any specific rules, physical boundaries, or NPC states from the context that restrict or affect this action.",
         },
-        logic_outcome: { 
-          type: "string", 
-          description: "Step 2: Based on the constraints, determine if the action succeeds/fails and briefly list what happens." 
+        logic_outcome: {
+          type: "string",
+          description:
+            "Step 2: Based on the constraints, determine if the action succeeds/fails and briefly list what happens.",
         },
         new_game_state: {
           type: "object",
@@ -193,11 +208,13 @@ export default function WebLLMChat() {
                   name: { type: "string" },
                   state: {
                     type: "string",
-                    description: "e.g., Mind-Controlled, Intoxicated, Fallen in love, Confused by gender identity",
+                    description:
+                      "e.g., Mind-Controlled, Intoxicated, Fallen in love, Confused by gender identity",
                   },
                   mood: {
                     type: "string",
-                    description: "e.g., Excited to experement, Craving master's approval, Desperate for humiliation",
+                    description:
+                      "e.g., Excited to experement, Craving master's approval, Desperate for humiliation",
                   },
                   current_action: {
                     type: "string",
@@ -218,7 +235,8 @@ export default function WebLLMChat() {
       const logicPrompt = `
       You are the Dungeon Master's Logic Engine. 
       Analyze the player's action based on the [CURRENT GAME STATE] and [Campaign Lore / Rules].
-     Follow these steps strictly:
+      
+      Follow these steps strictly:
       1. Identify Constraints: Are there rules, locked doors, or NPC conditions that apply here?
       2. Resolve Action: Is it possible? Does it succeed or fail?
       3. Update State: Modify the game state (NPC moods, states, actions, location) to reflect the result.
@@ -233,21 +251,36 @@ export default function WebLLMChat() {
             {
               role: "system",
               content:
-                "You strictly output JSON representing game mechanics and state changes. DO NOT write a story.",
+                "You strictly output JSON representing game mechanics and state changes. Think step-by-step. Keep all text fields extremely brief and concise (1-2 sentences max). DO NOT write a story. DO NOT repeat the context back to me.",
             },
             { role: "user", content: logicPrompt },
           ],
           temperature: 0.1,
+          max_tokens: 1000,
           response_format: {
             type: "json_object",
             schema: JSON.stringify(logicSchema),
           },
         });
 
-      const parsedLogic = JSON.parse(
-        logicResponse.choices[0].message.content || "{}",
+      const rawContent = logicResponse.choices[0].message.content || "{}";
+      let parsedLogic: any = {};
+
+      try {
+        parsedLogic = JSON.parse(rawContent);
+      } catch {
+        console.warn("DM Engine output invalid JSON. Raw output:", rawContent);
+        parsedLogic = {
+          identified_constraints: ["Failed to parse constraints."],
+          logic_outcome:
+            "The action resolves, but the exact consequences are unclear due to a DM error.",
+        };
+      }
+
+      console.log(
+        "Constraints Identified by DM Engine:",
+        parsedLogic.identified_constraints,
       );
-      console.log("Constraints Identified by DM Engine:", parsedLogic.identified_constraints);
       logicOutcome =
         parsedLogic.logic_outcome || "The action resolves neutrally.";
 
@@ -300,6 +333,8 @@ export default function WebLLMChat() {
           return copy;
         });
       }
+      setStatus("Extracting narrative facts...");
+      await extractAndStoreFacts(logicEngineRef.current, userText, assistantText);
       setStatus("Both engines ready! Awaiting your next move.");
     } catch (err) {
       console.error(err);

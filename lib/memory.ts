@@ -84,18 +84,21 @@ export async function archiveToEpisodicMemory(messages: Message[]) {
 export async function extractAndStoreFacts(
   engine: MLCEngineInterface,
   userMessage: string,
+  dmNarrative: string,
 ) {
   const db = await initMemoryDB();
 
   const prompt = `
-    Analyze the following user message and extract any concrete facts, personal preferences, or entities mentioned about the user. 
+    Analyze the following D&D turn (Player Action + DM Narrative).
+    Extract any concrete facts, newly introduced items, environmental details, or NPC traits that were established in this turn.
+    Do not extract basic combat mechanics (like "goblin took 5 damage"). Focus on permanent lore, inventory, or world-building facts.
     Format the output strictly as a JSON object with a single key "facts" containing an array of strings. 
     If there are no facts to extract, return {"facts": []}.
     
-    User Message: "${userMessage}"
+    Player Action: "${userMessage}"
+    DM Narrative: "${dmNarrative}"
   `;
 
-  // exact schema for the LLM to follow
   const factSchema = {
     type: "object",
     properties: { facts: { type: "array", items: { type: "string" } } },
@@ -126,14 +129,10 @@ export async function extractAndStoreFacts(
       for (const fact of parsed.facts) {
         const embedding = await getEmbedding(fact);
 
-        // semantic deduplication check
         let isDuplicate = false;
         for (const existingMem of existingSemanticMemories) {
           const similarity = cosineSimilarity(embedding, existingMem.embedding);
           if (similarity > 0.85) {
-            console.log(
-              `Skipping duplicate fact: "${fact}" (Matches existing: "${existingMem.text}" with score ${similarity.toFixed(2)})`,
-            );
             isDuplicate = true;
             break;
           }
@@ -147,8 +146,7 @@ export async function extractAndStoreFacts(
             timestamp: Date.now(),
           };
           await db.put("semantic", memory);
-          console.log("Extracted and saved new fact:", fact);
-
+          console.log("Extracted and saved new narrative fact:", fact);
           existingSemanticMemories.push(memory);
         }
       }
