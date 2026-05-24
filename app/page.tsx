@@ -2,6 +2,7 @@
 
 import * as webllm from "@mlc-ai/web-llm";
 import { useEffect, useRef, useState } from "react";
+import { generateLocalAvatar } from "../lib/avatar";
 import { getSlidingWindow, MAX_CONTEXT_TOKENS } from "../lib/budget";
 import {
   archiveToEpisodicMemory,
@@ -17,7 +18,6 @@ import {
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
-import { generateLocalAvatar } from "../lib/avatar";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -83,7 +83,11 @@ export default function WebLLMChat() {
   }, [messages, isLoaded]);
 
   function clearChat() {
-    if (window.confirm("Are you sure you want to clear the chat and start a new campaign?")) {
+    if (
+      window.confirm(
+        "Are you sure you want to clear the chat and start a new campaign?",
+      )
+    ) {
       setMessages([]);
       localStorage.removeItem("lonely-dnd-chat");
       setStatus("Chat cleared. Ready for a new adventure.");
@@ -232,8 +236,12 @@ export default function WebLLMChat() {
             player: {
               type: "object",
               properties: {
-                physical_description: { type: "string", description: "A concise visual description of the player character." }
-              }
+                physical_description: {
+                  type: "string",
+                  description:
+                    "A concise visual description of the player character.",
+                },
+              },
             },
             npcs: {
               type: "array",
@@ -255,8 +263,9 @@ export default function WebLLMChat() {
                   },
                   physical_description: {
                     type: "string",
-                    description: "A vivid physical description of the NPC for portrait generation."
-                  }
+                    description:
+                      "A vivid physical description of the NPC for portrait generation.",
+                  },
                 },
                 required: ["name", "state", "mood", "current_action"],
               },
@@ -322,29 +331,88 @@ export default function WebLLMChat() {
         parsedLogic.logic_outcome || "The action resolves neutrally.";
 
       if (parsedLogic.new_game_state) {
-        if (parsedLogic.new_game_state.player?.physical_description) {
-           if (!currentState.player?.avatar_url) {
-               setStatus("Generating player avatar...");
-               parsedLogic.new_game_state.player.avatar_url = await generateLocalAvatar(parsedLogic.new_game_state.player.physical_description);
-           } else {
-               // Persist existing avatar
-               parsedLogic.new_game_state.player.avatar_url = currentState.player.avatar_url;
-               parsedLogic.new_game_state.player.physical_description = currentState.player.physical_description;
-           }
-        }
+        let needsAvatarGeneration = false;
 
+        if (
+          parsedLogic.new_game_state.player?.physical_description &&
+          !currentState.player?.avatar_url
+        ) {
+          needsAvatarGeneration = true;
+        }
         for (const npc of parsedLogic.new_game_state.npcs) {
-          const existingNPC = currentState.npcs.find((n) => n.name === npc.name);
-          
-          if (existingNPC?.avatar_url) {
-            npc.avatar_url = existingNPC.avatar_url;
-            npc.physical_description = existingNPC.physical_description;
-          } else if (npc.physical_description) {
-            setStatus(`Generating avatar for ${npc.name}...`);
-            npc.avatar_url = await generateLocalAvatar(npc.physical_description);
+          const existingNPC = currentState.npcs.find(
+            (n) => n.name === npc.name,
+          );
+          if (!existingNPC?.avatar_url && npc.physical_description) {
+            needsAvatarGeneration = true;
+            break;
           }
         }
 
+        if (needsAvatarGeneration) {
+          setStatus("Freeing VRAM for Image Generation...");
+
+          await logicEngineRef.current?.unload();
+          await storyEngineRef.current?.unload();
+
+          if (
+            parsedLogic.new_game_state.player?.physical_description &&
+            !currentState.player?.avatar_url
+          ) {
+            setStatus(
+              "Generating local player avatar (This may take a moment)...",
+            );
+            parsedLogic.new_game_state.player.avatar_data_url =
+              await generateLocalAvatar(
+                parsedLogic.new_game_state.player.physical_description,
+              );
+          } else if (currentState.player?.avatar_url) {
+            parsedLogic.new_game_state.player.avatar_data_url =
+              currentState.player.avatar_url;
+            parsedLogic.new_game_state.player.physical_description =
+              currentState.player.physical_description;
+          }
+
+          for (const npc of parsedLogic.new_game_state.npcs) {
+            const existingNPC = currentState.npcs.find(
+              (n) => n.name === npc.name,
+            );
+
+            if (existingNPC?.avatar_url) {
+              npc.avatar_data_url = existingNPC.avatar_url;
+              npc.physical_description = existingNPC.physical_description;
+            } else if (npc.physical_description) {
+              setStatus(`Generating local avatar for ${npc.name}...`);
+              npc.avatar_data_url = await generateLocalAvatar(
+                npc.physical_description,
+              );
+            }
+          }
+
+          setStatus("Reloading LLM engines for the story...");
+          await initDualEngines(logicModel, storyModel);
+        } else {
+          if (
+            currentState.player?.avatar_url &&
+            parsedLogic.new_game_state.player
+          ) {
+            parsedLogic.new_game_state.player.avatar_data_url =
+              currentState.player.avatar_url;
+            parsedLogic.new_game_state.player.physical_description =
+              currentState.player.physical_description;
+          }
+          for (const npc of parsedLogic.new_game_state.npcs) {
+            const existingNPC = currentState.npcs.find(
+              (n) => n.name === npc.name,
+            );
+            if (existingNPC?.avatar_url) {
+              npc.avatar_data_url = existingNPC.avatar_url;
+              npc.physical_description = existingNPC.physical_description;
+            }
+          }
+        }
+
+        // 4. Save the finalized state
         await saveGameState(parsedLogic.new_game_state);
         console.log("Game State Updated:", parsedLogic.new_game_state);
       }
@@ -394,7 +462,11 @@ export default function WebLLMChat() {
         });
       }
       setStatus("Extracting narrative facts...");
-      await extractAndStoreFacts(logicEngineRef.current, userText, assistantText);
+      await extractAndStoreFacts(
+        logicEngineRef.current,
+        userText,
+        assistantText,
+      );
       setStatus("Both engines ready! Awaiting your next move.");
     } catch (err) {
       console.error(err);
