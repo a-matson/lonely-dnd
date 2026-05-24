@@ -61,6 +61,34 @@ export default function WebLLMChat() {
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<string>("Idle");
 
+  const [isLoaded, setIsLoaded] = useState(false);
+
+  useEffect(() => {
+    const savedChat = localStorage.getItem("lonely-dnd-chat");
+    if (savedChat) {
+      try {
+        setMessages(JSON.parse(savedChat));
+      } catch (e) {
+        console.error("Failed to parse saved chat:", e);
+      }
+    }
+    setIsLoaded(true);
+  }, []);
+
+  useEffect(() => {
+    if (isLoaded) {
+      localStorage.setItem("lonely-dnd-chat", JSON.stringify(messages));
+    }
+  }, [messages, isLoaded]);
+
+  function clearChat() {
+    if (window.confirm("Are you sure you want to clear the chat and start a new campaign?")) {
+      setMessages([]);
+      localStorage.removeItem("lonely-dnd-chat");
+      setStatus("Chat cleared. Ready for a new adventure.");
+    }
+  }
+
   async function initDualEngines(logicId: string, storyId: string) {
     setLoading(true);
     setStatus("Loading dual engines...");
@@ -208,13 +236,11 @@ export default function WebLLMChat() {
                   name: { type: "string" },
                   state: {
                     type: "string",
-                    description:
-                      "e.g., Mind-Controlled, Intoxicated, Fallen in love, Confused by gender identity",
+                    description: "e.g., Healthy, Injured, Dead, Hidden",
                   },
                   mood: {
                     type: "string",
-                    description:
-                      "e.g., Excited to experement, Craving master's approval, Desperate for humiliation",
+                    description: "e.g., Hostile, Terrified, Friendly",
                   },
                   current_action: {
                     type: "string",
@@ -413,6 +439,15 @@ export default function WebLLMChat() {
       </div>
 
       <div className="p-4 border-t border-gray-800 bg-gray-900 flex gap-2">
+        <button
+          type="button"
+          onClick={clearChat}
+          className="bg-red-900/50 hover:bg-red-800 text-red-200 px-4 py-2 rounded font-semibold transition-colors shadow-md"
+          title="Clear Chat"
+        >
+          Reset
+        </button>
+
         <input
           className="flex-1 bg-gray-950 border border-gray-700 px-4 py-3 rounded focus:outline-none focus:border-amber-500 text-lg"
           value={prompt}
