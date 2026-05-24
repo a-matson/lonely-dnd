@@ -116,20 +116,44 @@ export async function addDocument(text: string, type: DocumentType = "lore") {
   }
 }
 
-// HyDE: generate a hypothetical answer to improve embedding matching
-export async function generateHyDE(
+export async function extractEntitiesAndIntent(
   engine: MLCEngineInterface,
   query: string,
-): Promise<string | null> {
-  const prompt = `Please write a short, informative hypothetical paragraph that directly answers the following question. Do not include introductory filler. \n\nQuestion: ${query}`;
+): Promise<{ action: string; targets: string[] }> {
+  const prompt = `
+    Analyze the following player action in a D&D game.
+    Extract the primary action verb and any key entities, items, or characters mentioned.
+    Format the output strictly as a JSON object with keys "action" (string) and "targets" (array of strings).
+    
+    Player Action: "${query}"
+  `;
 
-  const response = await engine.chat.completions.create({
-    messages: [{ role: "user", content: prompt }],
-    temperature: 0.3,
-    max_tokens: 150,
-  });
+  const extractionSchema = {
+    type: "object",
+    properties: {
+      action: { type: "string" },
+      targets: { type: "array", items: { type: "string" } },
+    },
+    required: ["action", "targets"],
+  };
 
-  return response.choices[0].message.content;
+  try {
+    const response = await engine.chat.completions.create({
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.1,
+      response_format: {
+        type: "json_object",
+        schema: JSON.stringify(extractionSchema),
+      },
+    });
+
+    const resultStr = response.choices[0].message.content;
+    const parsed = JSON.parse(resultStr || '{"action": "unknown", "targets": []}');
+    return parsed;
+  } catch (e) {
+    console.warn("Entity extraction failed, falling back to empty targets", e);
+    return { action: "unknown", targets: [] };
+  }
 }
 
 // hybrid search: RRF of vector + keyword

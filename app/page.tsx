@@ -10,7 +10,7 @@ import {
 } from "../lib/memory";
 import {
   addDocument,
-  generateHyDE,
+  extractEntitiesAndIntent,
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
@@ -118,20 +118,27 @@ export default function WebLLMChat() {
 
     await extractAndStoreFacts(logicEngineRef.current, userText);
 
-    setStatus("Recalling campaign lore...");
-    let searchEmbedding: number[];
+    setStatus("Analyzing intent and entities...");
+    let extractedData = { action: "", targets: [] as string[] };
+    
     try {
-      const hypotheticalAnswer = await generateHyDE(
-        logicEngineRef.current,
-        userText,
-      );
-      searchEmbedding = await getEmbedding(hypotheticalAnswer || userText);
+      extractedData = await extractEntitiesAndIntent(logicEngineRef.current, userText);
+      console.log("Extracted Intent:", extractedData);
     } catch {
-      searchEmbedding = await getEmbedding(userText);
+      console.warn("Extraction failed, proceeding with raw query");
     }
 
+    const searchEmbedding = await getEmbedding(userText);
+    
+    const keywordQuery = [
+      extractedData.action, 
+      ...extractedData.targets, 
+      userText
+    ].join(" ");
+    
+    setStatus("Searching campaign lore and memories...");
     const [retrievedDocs, relevantMemories] = await Promise.all([
-      searchDocumentsHybrid(userText, searchEmbedding, 3),
+      searchDocumentsHybrid(keywordQuery, searchEmbedding, 3),
       retrieveRelevantMemory(searchEmbedding, 3),
     ]);
 
