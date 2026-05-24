@@ -171,10 +171,14 @@ export default function WebLLMChat() {
     const logicSchema = {
       type: "object",
       properties: {
-        logic_outcome: {
-          type: "string",
-          description:
-            "Brief bullet points of what logically happens based on the rules and current state.",
+        identified_constraints: {
+          type: "array",
+          items: { type: "string" },
+          description: "Step 1: List any specific rules, physical boundaries, or NPC states from the context that restrict or affect this action."
+        },
+        logic_outcome: { 
+          type: "string", 
+          description: "Step 2: Based on the constraints, determine if the action succeeds/fails and briefly list what happens." 
         },
         new_game_state: {
           type: "object",
@@ -189,11 +193,11 @@ export default function WebLLMChat() {
                   name: { type: "string" },
                   state: {
                     type: "string",
-                    description: "e.g., Healthy, Injured, Dead, Hidden",
+                    description: "e.g., Mind-Controlled, Intoxicated, Fallen in love, Confused by gender identity",
                   },
                   mood: {
                     type: "string",
-                    description: "e.g., Hostile, Terrified, Friendly",
+                    description: "e.g., Excited to experement, Craving master's approval, Desperate for humiliation",
                   },
                   current_action: {
                     type: "string",
@@ -207,15 +211,17 @@ export default function WebLLMChat() {
           required: ["location", "npcs"],
         },
       },
-      required: ["logic_outcome", "new_game_state"],
+      required: ["identified_constraints", "logic_outcome", "new_game_state"],
     };
 
     try {
       const logicPrompt = `
       You are the Dungeon Master's Logic Engine. 
       Analyze the player's action based on the [CURRENT GAME STATE] and [Campaign Lore / Rules].
-      1. Determine if the action succeeds or fails.
-      2. Update the game state (NPC moods, states, actions, location) reflecting the result of this turn.
+     Follow these steps strictly:
+      1. Identify Constraints: Are there rules, locked doors, or NPC conditions that apply here?
+      2. Resolve Action: Is it possible? Does it succeed or fail?
+      3. Update State: Modify the game state (NPC moods, states, actions, location) to reflect the result.
       
       Context: ${memoryContext}
       Player Action: ${userText}
@@ -241,6 +247,7 @@ export default function WebLLMChat() {
       const parsedLogic = JSON.parse(
         logicResponse.choices[0].message.content || "{}",
       );
+      console.log("Constraints Identified by DM Engine:", parsedLogic.identified_constraints);
       logicOutcome =
         parsedLogic.logic_outcome || "The action resolves neutrally.";
 
