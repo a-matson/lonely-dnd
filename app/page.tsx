@@ -17,6 +17,7 @@ import {
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
+import { generateLocalAvatar } from "../lib/avatar";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -228,6 +229,12 @@ export default function WebLLMChat() {
           properties: {
             location: { type: "string" },
             time_and_weather: { type: "string" },
+            player: {
+              type: "object",
+              properties: {
+                physical_description: { type: "string", description: "A concise visual description of the player character." }
+              }
+            },
             npcs: {
               type: "array",
               items: {
@@ -246,6 +253,10 @@ export default function WebLLMChat() {
                     type: "string",
                     description: "What the NPC is doing right now",
                   },
+                  physical_description: {
+                    type: "string",
+                    description: "A vivid physical description of the NPC for portrait generation."
+                  }
                 },
                 required: ["name", "state", "mood", "current_action"],
               },
@@ -311,6 +322,29 @@ export default function WebLLMChat() {
         parsedLogic.logic_outcome || "The action resolves neutrally.";
 
       if (parsedLogic.new_game_state) {
+        if (parsedLogic.new_game_state.player?.physical_description) {
+           if (!currentState.player?.avatar_url) {
+               setStatus("Generating player avatar...");
+               parsedLogic.new_game_state.player.avatar_url = await generateLocalAvatar(parsedLogic.new_game_state.player.physical_description);
+           } else {
+               // Persist existing avatar
+               parsedLogic.new_game_state.player.avatar_url = currentState.player.avatar_url;
+               parsedLogic.new_game_state.player.physical_description = currentState.player.physical_description;
+           }
+        }
+
+        for (const npc of parsedLogic.new_game_state.npcs) {
+          const existingNPC = currentState.npcs.find((n) => n.name === npc.name);
+          
+          if (existingNPC?.avatar_url) {
+            npc.avatar_url = existingNPC.avatar_url;
+            npc.physical_description = existingNPC.physical_description;
+          } else if (npc.physical_description) {
+            setStatus(`Generating avatar for ${npc.name}...`);
+            npc.avatar_url = await generateLocalAvatar(npc.physical_description);
+          }
+        }
+
         await saveGameState(parsedLogic.new_game_state);
         console.log("Game State Updated:", parsedLogic.new_game_state);
       }

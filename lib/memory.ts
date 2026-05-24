@@ -16,12 +16,15 @@ export interface NPCState {
   state: string;
   mood: string;
   current_action: string;
+  physical_description?: string;
+  avatar_url?: string;
 }
 
 export interface GameState {
   id: string;
   location: string;
   time_and_weather: string;
+  player?: { physical_description?: string; avatar_url?: string };
   npcs: NPCState[];
 }
 
@@ -51,6 +54,7 @@ export async function getCurrentGameState(): Promise<GameState> {
       id: "current-state",
       location: "Unknown Location",
       time_and_weather: "Clear",
+      player: {},
       npcs: [],
     };
   }
