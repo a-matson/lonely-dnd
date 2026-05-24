@@ -203,3 +203,29 @@ export async function searchDocumentsHybrid(
 
   return [...finalRules, ...finalLore].map((res) => res.chunk);
 }
+
+export async function getAllDocuments(): Promise<RAGChunk[]> {
+  const db = await initDB();
+  return await db.getAll("chunks");
+}
+
+export async function deleteDocument(id: string) {
+  const db = await initDB();
+  await db.delete("chunks", id);
+  if (miniSearch.has(id)) {
+    miniSearch.discard(id);
+  }
+}
+
+export async function updateDocument(id: string, newText: string) {
+  const db = await initDB();
+  const chunk = await db.get("chunks", id);
+  if (chunk) {
+    chunk.text = newText;
+    chunk.embedding = await getEmbedding(newText);
+    await db.put("chunks", chunk);
+    if (miniSearch.has(id)) {
+      miniSearch.replace(chunk);
+    }
+  }
+}

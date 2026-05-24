@@ -206,3 +206,23 @@ export async function retrieveRelevantMemory(
     semantic: semanticScores.filter((s) => s.score > 0.55),
   };
 }
+
+export async function getAllMemories(type: "episodic" | "semantic"): Promise<MemoryChunk[]> {
+  const db = await initMemoryDB();
+  return await db.getAll(type);
+}
+
+export async function deleteMemory(type: "episodic" | "semantic", id: string) {
+  const db = await initMemoryDB();
+  await db.delete(type, id);
+}
+
+export async function updateMemory(type: "episodic" | "semantic", id: string, newText: string) {
+  const db = await initMemoryDB();
+  const memory = await db.get(type, id);
+  if (memory) {
+    memory.text = newText;
+    memory.embedding = await getEmbedding(newText);
+    await db.put(type, memory);
+  }
+}

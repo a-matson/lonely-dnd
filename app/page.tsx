@@ -18,6 +18,7 @@ import {
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
+import MemoryManager from "../components/MemoryManager";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -63,6 +64,7 @@ export default function WebLLMChat() {
   const [status, setStatus] = useState<string>("Idle");
 
   const [isLoaded, setIsLoaded] = useState(false);
+  const [isMenuOpen, setIsMenuOpen] = useState(false);
 
   useEffect(() => {
     const savedChat = localStorage.getItem("lonely-dnd-chat");
@@ -482,13 +484,20 @@ export default function WebLLMChat() {
           <p className="text-xs text-gray-400">Powered by Dual-Engine WebLLM</p>
         </div>
 
-        <div className="flex gap-2 items-center">
+       <div className="flex gap-2 items-center">
+          <button
+            type="button"
+            onClick={() => setIsMenuOpen(true)}
+            className="bg-gray-800 hover:bg-gray-700 border border-gray-700 px-3 py-1 mr-2 rounded text-sm transition-colors shadow-md"
+          >
+            🧠 Manage Memory
+          </button>
           <button
             type="button"
             onClick={handleAddKnowledge}
             className="bg-amber-700 hover:bg-amber-600 px-3 py-1 mr-2 rounded text-sm transition-colors shadow-md"
           >
-            + Add Campaign Lore
+            + Add Lore
           </button>
 
           <div className="flex flex-col gap-1">
@@ -528,6 +537,8 @@ export default function WebLLMChat() {
       <div className="px-4 py-2 text-xs text-amber-400 border-b border-gray-800 flex justify-between bg-gray-900">
         <span className="animate-pulse">{status}</span>
       </div>
+
+      <MemoryManager isOpen={isMenuOpen} onClose={() => setIsMenuOpen(false)} />
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((m, i) => (
