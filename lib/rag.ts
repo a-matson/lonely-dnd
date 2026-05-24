@@ -54,18 +54,20 @@ export function chunkText(
   return chunks;
 }
 
-// MiniSearch
-interface RAGChunk {
+export type DocumentType = "rule" | "lore" | "npc" | "location";
+
+export interface RAGChunk {
   id: string;
   parentId: string;
   text: string;
   embedding: number[];
   timestamp: number;
+  type: DocumentType;
 }
 
 const miniSearch = new MiniSearch<RAGChunk>({
   fields: ["text"],
-  storeFields: ["id", "text", "parentId"],
+  storeFields: ["id", "text", "parentId", "type"], 
 });
 
 export async function initDB(): Promise<IDBPDatabase> {
@@ -87,7 +89,7 @@ export async function initDB(): Promise<IDBPDatabase> {
   return db;
 }
 
-export async function addDocument(text: string) {
+export async function addDocument(text: string, type: DocumentType = "lore") {
   const db = await initDB();
   const parentId = crypto.randomUUID();
   const chunks = chunkText(text);
@@ -102,6 +104,7 @@ export async function addDocument(text: string) {
       text: chunkTextStr,
       embedding,
       timestamp: Date.now(),
+      type,
     };
 
     await db.put("chunks", docChunk);
@@ -163,10 +166,13 @@ export async function searchDocumentsHybrid(
     fusionScores[item.id].score += 1 / (k + index + 1);
   });
 
-  const finalResults = Object.values(fusionScores)
-    .sort((a, b) => b.score - a.score)
-    .map((res) => res.chunk)
-    .slice(0, topK);
+  const sortedResults = Object.values(fusionScores).sort((a, b) => b.score - a.score);
+  
+  const rules = sortedResults.filter(r => r.chunk.type === "rule");
+  const lore = sortedResults.filter(r => r.chunk.type !== "rule");
 
-  return finalResults;
+  const finalRules = rules.slice(0, 1);
+  const finalLore = lore.slice(0, topK - finalRules.length);
+
+  return [...finalRules, ...finalLore].map((res) => res.chunk);
 }

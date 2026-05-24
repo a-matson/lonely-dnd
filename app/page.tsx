@@ -14,6 +14,7 @@ import {
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
+import { DocumentType } from "../lib/rag";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -81,20 +82,28 @@ export default function WebLLMChat() {
   }, []);
 
   async function handleAddKnowledge() {
-    const text = window.prompt(
-      "Paste campaign lore, rules, or world-building text:",
-    );
+    const text = window.prompt("Paste campaign lore, rules, or world-building text:");
     if (!text) return;
 
-    setStatus("Adding lore to vector DB...");
-    try {
-      await addDocument(text);
-      setStatus("Lore added! Engines ready.");
-    } catch (err) {
-      console.error(err);
-      setStatus("Failed to add lore");
+    const typeInput = window.prompt(
+      "Is this a strict rule constraint, or general lore?\nType 'rule', 'lore', 'npc', or 'location'", 
+      "lore"
+    );
+    
+    const validTypes = ["rule", "lore", "npc", "location"];
+      const docType: DocumentType = validTypes.includes(typeInput?.toLowerCase() || "") 
+        ? (typeInput?.toLowerCase() as DocumentType) 
+        : "lore";
+
+      setStatus(`Adding ${docType} to vector DB...`);
+      try {
+        await addDocument(text, docType);
+        setStatus(`${docType.charAt(0).toUpperCase() + docType.slice(1)} added! Engines ready.`);
+      } catch (err) {
+        console.error(err);
+        setStatus("Failed to add knowledge");
+      }
     }
-  }
 
   async function sendMessage() {
     if (!logicEngineRef.current || !storyEngineRef.current || !prompt.trim())
