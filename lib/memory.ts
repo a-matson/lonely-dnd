@@ -134,17 +134,28 @@ export async function retrieveRelevantMemory(
   const episodic: MemoryChunk[] = await db.getAll("episodic");
   const semantic: MemoryChunk[] = await db.getAll("semantic");
 
-  // score episodic memories (past conversations)
+  const now = Date.now();
+
   const episodicScores = episodic
-    .map((chunk) => ({
-      ...chunk,
-      type: "episodic",
-      score: cosineSimilarity(queryEmbedding, chunk.embedding),
-    }))
+    .map((chunk) => {
+      const ageInHours = (now - chunk.timestamp) / (1000 * 60 * 60);
+      
+      // Time decay factor: newer memories stay close to a 1.0 multiplier.
+      // Older memories slowly decay down to a minimum of 0.5.
+      const timeDecay = Math.max(0.5, 1 - (ageInHours * 0.05)); 
+      
+      const semanticScore = cosineSimilarity(queryEmbedding, chunk.embedding);
+
+      return {
+        ...chunk,
+        type: "episodic",
+        score: semanticScore * timeDecay, 
+      };
+    })
     .sort((a, b) => b.score - a.score)
     .slice(0, topK);
 
-  // score semantic memories (core facts)
+  // score semantic memories (core facts) - NO time decay
   const semanticScores = semantic
     .map((chunk) => ({
       ...chunk,
@@ -155,7 +166,7 @@ export async function retrieveRelevantMemory(
     .slice(0, topK);
 
   return {
-    episodic: episodicScores.filter((s) => s.score > 0.5),
+    episodic: episodicScores.filter((s) => s.score > 0.45),
     semantic: semanticScores.filter((s) => s.score > 0.55),
   };
 }
