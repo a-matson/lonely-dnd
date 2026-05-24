@@ -22,47 +22,54 @@ export type Message = {
 
 const MODELS = [
   {
-    label: "Phi-3 Mini (fast, recommended)",
+    label: "Phi-3 Mini (Great for Story)",
     value: "Phi-3-mini-4k-instruct-q4f16_1-MLC",
   },
   {
-    label: "Llama 3.2 1B (Better Tool Use)",
+    label: "Llama 3.2 1B (Great for Logic)",
     value: "Llama-3.2-1B-Instruct-q4f16_1-MLC",
   },
   {
-    label: "Gemma 2B (balanced)",
+    label: "Gemma 2B (Balanced)",
     value: "gemma-2-2b-it-q4f16_1-MLC",
   },
   {
-    label: "SmolLM2 1.7B (small)",
+    label: "SmolLM2 1.7B (Small & Fast)",
     value: "SmolLM2-1.7B-Instruct-q4f16_1-MLC",
-  }
+  },
 ];
 
 export default function WebLLMChat() {
-  const engineRef = useRef<webllm.MLCEngineInterface | null>(null);
-  const [model, setModel] = useState(MODELS[0].value);
+  const logicEngineRef = useRef<webllm.MLCEngineInterface | null>(null);
+  const storyEngineRef = useRef<webllm.MLCEngineInterface | null>(null);
+
+  const [logicModel, setLogicModel] = useState(MODELS[1].value);
+  const [storyModel, setStoryModel] = useState(MODELS[0].value);
+
   const [loading, setLoading] = useState(false);
   const [prompt, setPrompt] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [status, setStatus] = useState<string>("Idle");
 
-  async function initModel(selectedModel: string) {
+  async function initDualEngines(logicId: string, storyId: string) {
     setLoading(true);
-    setStatus("Loading model (first time may take a while)...");
+    setStatus("Loading dual engines (Warning: Requires ~4GB+ VRAM)...");
 
     try {
-      const engine = await webllm.CreateMLCEngine(selectedModel, {
-        initProgressCallback: (p: webllm.InitProgressReport) => {
-          setStatus(`${p.text || "Loading..."}`);
-        },
+      setStatus(`Loading Logic Engine (${logicId})...`);
+      logicEngineRef.current = await webllm.CreateMLCEngine(logicId, {
+        initProgressCallback: (p) => setStatus(`Logic Engine: ${p.text}`),
       });
 
-      engineRef.current = engine;
-      setStatus("Model ready");
+      setStatus(`Loading Story Engine (${storyId})...`);
+      storyEngineRef.current = await webllm.CreateMLCEngine(storyId, {
+        initProgressCallback: (p) => setStatus(`Story Engine: ${p.text}`),
+      });
+
+      setStatus("Both engines ready! Roll for initiative.");
     } catch (err) {
       console.error(err);
-      setStatus("Failed to load model");
+      setStatus("Failed to load one or both models. Check VRAM capacity.");
     } finally {
       setLoading(false);
     }
@@ -70,25 +77,28 @@ export default function WebLLMChat() {
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: not needed
   useEffect(() => {
-    initModel(model);
+    initDualEngines(logicModel, storyModel);
   }, []);
 
   async function handleAddKnowledge() {
-    const text = window.prompt("Paste knowledge text to embed:");
+    const text = window.prompt(
+      "Paste campaign lore, rules, or world-building text:",
+    );
     if (!text) return;
 
-    setStatus("Adding knowledge to vector DB...");
+    setStatus("Adding lore to vector DB...");
     try {
       await addDocument(text);
-      setStatus("Knowledge added! Model ready");
+      setStatus("Lore added! Engines ready.");
     } catch (err) {
       console.error(err);
-      setStatus("Failed to add knowledge");
+      setStatus("Failed to add lore");
     }
   }
 
   async function sendMessage() {
-    if (!engineRef.current || !prompt.trim()) return;
+    if (!logicEngineRef.current || !storyEngineRef.current || !prompt.trim())
+      return;
 
     const userText = prompt;
     setPrompt("");
@@ -97,42 +107,28 @@ export default function WebLLMChat() {
     const newMessages = [...messages, displayMessage];
     setMessages([...newMessages, { role: "assistant", content: "" }]);
 
-    await extractAndStoreFacts(engineRef.current, userText);
+    await extractAndStoreFacts(logicEngineRef.current, userText);
 
-    // HyDE query transformation
-    setStatus("Thinking about the query (HyDE)...");
+    setStatus("Recalling campaign lore...");
     let searchEmbedding: number[];
     try {
       const hypotheticalAnswer = await generateHyDE(
-        engineRef.current,
+        logicEngineRef.current,
         userText,
       );
-      if (!hypotheticalAnswer) throw new Error("Failed to generate response");
-      searchEmbedding = await getEmbedding(hypotheticalAnswer);
-    } catch (e) {
-      console.warn("HyDE failed, falling back to raw query embedding", e);
-      try {
-        searchEmbedding = await getEmbedding(userText);
-      } catch (innerError) {
-        console.error("Embedding completely failed", innerError);
-        setStatus("Error: Model embedding failed.");
-        setLoading(false);
-        return;
-      }
+      searchEmbedding = await getEmbedding(hypotheticalAnswer || userText);
+    } catch {
+      searchEmbedding = await getEmbedding(userText);
     }
 
-    // hybrid retrieval across RAG + episodic + semantic
-    setStatus("Searching knowledge base (Hybrid Search) and Memories...");
     const [retrievedDocs, relevantMemories] = await Promise.all([
       searchDocumentsHybrid(userText, searchEmbedding, 3),
       retrieveRelevantMemory(searchEmbedding, 3),
     ]);
 
-    // token budgeting
     const historyBudget = MAX_CONTEXT_TOKENS - 1500;
     const windowMessages = getSlidingWindow(newMessages, historyBudget);
 
-    // archive overflowing messages to episodic memory
     const overflowMessages = newMessages.slice(
       0,
       newMessages.length - windowMessages.length,
@@ -141,41 +137,78 @@ export default function WebLLMChat() {
       await archiveToEpisodicMemory(overflowMessages);
     }
 
-    // build the contextualised prompt
     const memoryContext = `
-    [Known Facts about User]:
+    [Character Sheet / Known Facts]:
     ${relevantMemories.semantic.length ? relevantMemories.semantic.map((f) => `- ${f.text}`).join("\n") : "None relevant."}
 
-    [Past Conversation Context]:
+    [Past Events / Episodic Memory]:
     ${relevantMemories.episodic.length ? relevantMemories.episodic.map((e) => `...\n${e.text}\n...`).join("\n") : "None relevant."}
 
-    [Knowledge Base / RAG]:
-    ${retrievedDocs.length ? retrievedDocs.map((d, i) => `Chunk ${i + 1}:\n${d.text}`).join("\n\n") : "None relevant."}
+    [Campaign Lore / RAG]:
+    ${retrievedDocs.length ? retrievedDocs.map((d, i) => `Lore Chunk ${i + 1}:\n${d.text}`).join("\n\n") : "None relevant."}
     `;
 
-    const augmentedUserMessage: Message = {
-      role: "user",
-      content: `Use the provided context to answer the user's latest question.\n\nContext:\n${memoryContext}\n\nQuestion: ${userText}`,
-    };
-
-    const systemMessage: Message = {
-      role: "system",
-      content:
-        "You are an advanced, helpful AI assistant with memory. Prioritize [Known Facts about User] when formulating personal responses. Provide concise, direct answers.",
-    };
-
-    const payloadMessages = [
-      systemMessage,
-      ...windowMessages.slice(0, -1),
-      augmentedUserMessage,
-    ];
-
-    // generate response
-    setStatus("Generating response...");
+    setStatus("Logic Engine is computing the outcome...");
+    let logicOutcome = "";
     try {
-      const stream = await engineRef.current.chat.completions.create({
+      const logicPrompt = `
+      You are the Dungeon Master's Logic Engine. 
+      Analyze the player's action based on the context. 
+      Determine if it succeeds, fails, or triggers a consequence. Keep your output to a brief, factual bulleted list of state changes. DO NOT write a story.
+      
+      Context: ${memoryContext}
+      Player Action: ${userText}
+      `;
+
+      const logicResponse =
+        await logicEngineRef.current.chat.completions.create({
+          messages: [
+            {
+              role: "system",
+              content:
+                "You strictly output game mechanics and logical consequences.",
+            },
+            { role: "user", content: logicPrompt },
+          ],
+          temperature: 0.1,
+        });
+      logicOutcome =
+        logicResponse.choices[0].message.content ||
+        "The action resolves neutrally.";
+
+      console.log("LOGIC ENGINE COMPUTATION:", logicOutcome);
+    } catch (err) {
+      console.error(err);
+      setStatus("Logic Engine failed.");
+      return;
+    }
+
+    setStatus("Story Engine is narrating...");
+    try {
+      const storyPrompt = `
+      Context: ${memoryContext}
+      Player Action: ${userText}
+      Logical Outcome determined by the DM: ${logicOutcome}
+
+      Using the Logical Outcome as your strict guide, write a highly descriptive, immersive paragraph narrating what happens next in the D&D campaign. Describe the environment, the action, and the result. Address the player in the second person ("You...").
+      `;
+
+      const storySystemMessage: webllm.ChatCompletionMessageParam = {
+        role: "system",
+        content:
+          "You are the creative, descriptive Narrator of a D&D game. You bring the world to life with rich sensory details.",
+      };
+
+      const payloadMessages = [
+        storySystemMessage,
+        ...windowMessages.slice(0, -1),
+        { role: "user", content: storyPrompt },
+      ] as webllm.ChatCompletionMessageParam[];
+
+      const stream = await storyEngineRef.current.chat.completions.create({
         messages: payloadMessages,
         stream: true,
+        temperature: 0.7,
       });
 
       let assistantText = "";
@@ -187,59 +220,76 @@ export default function WebLLMChat() {
           return copy;
         });
       }
-      setStatus("Model ready");
+      setStatus("Both engines ready! Awaiting your next move.");
     } catch (err) {
       console.error(err);
-      setStatus("Error generating response");
+      setStatus("Error generating story response");
     }
   }
 
   return (
-    <div className="min-h-screen flex flex-col bg-gray-950 text-white">
+    <div className="min-h-screen flex flex-col bg-gray-950 text-white font-serif">
       <div className="p-4 border-b border-gray-800 flex items-center justify-between">
         <div>
-          <h1 className="text-xl font-semibold">WebLLM Starter (RAG)</h1>
-          <p className="text-xs text-gray-400">
-            Runs fully in browser (WebGPU)
-          </p>
+          <h1 className="text-2xl font-bold text-amber-500">Lonely D&D</h1>
+          <p className="text-xs text-gray-400">Powered by Dual-Engine WebLLM</p>
         </div>
 
         <div className="flex gap-2 items-center">
           <button
             type="button"
             onClick={handleAddKnowledge}
-            className="bg-green-700 hover:bg-green-600 px-3 py-1 mr-2 rounded text-sm transition-colors"
+            className="bg-amber-700 hover:bg-amber-600 px-3 py-1 mr-2 rounded text-sm transition-colors shadow-md"
           >
-            + Add Knowledge
+            + Add Campaign Lore
           </button>
 
-          <select
-            className="bg-gray-900 border border-gray-700 px-2 py-1 rounded"
-            value={model}
-            onChange={(e) => {
-              setModel(e.target.value);
-              initModel(e.target.value);
-            }}
+          <div className="flex flex-col gap-1">
+            <select
+              className="bg-gray-900 border border-gray-700 px-2 py-1 rounded text-xs"
+              value={logicModel}
+              onChange={(e) => setLogicModel(e.target.value)}
+            >
+              {MODELS.map((m) => (
+                <option key={`logic-${m.value}`} value={m.value}>
+                  Logic: {m.label}
+                </option>
+              ))}
+            </select>
+            <select
+              className="bg-gray-900 border border-gray-700 px-2 py-1 rounded text-xs"
+              value={storyModel}
+              onChange={(e) => setStoryModel(e.target.value)}
+            >
+              {MODELS.map((m) => (
+                <option key={`story-${m.value}`} value={m.value}>
+                  Story: {m.label}
+                </option>
+              ))}
+            </select>
+          </div>
+          <button
+            type="button"
+            onClick={() => initDualEngines(logicModel, storyModel)}
+            className="bg-gray-700 hover:bg-gray-600 px-3 py-2 rounded text-xs"
           >
-            {MODELS.map((m) => (
-              <option key={m.value} value={m.value}>
-                {m.label}
-              </option>
-            ))}
-          </select>
+            Reload Engines
+          </button>
         </div>
       </div>
 
-      <div className="px-4 py-2 text-xs text-gray-400 border-b border-gray-800 flex justify-between">
-        <span>{status}</span>
+      <div className="px-4 py-2 text-xs text-amber-400 border-b border-gray-800 flex justify-between bg-gray-900">
+        <span className="animate-pulse">{status}</span>
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((m, i) => (
           <div
             key={`${m.role}-${i}`}
-            className={`max-w-2xl p-3 rounded-lg whitespace-pre-wrap ${
-              m.role === "user" ? "bg-blue-600 ml-auto" : "bg-gray-800 mr-auto"
+            className={`max-w-3xl p-4 rounded-lg whitespace-pre-wrap leading-relaxed shadow-lg ${
+              m.role === "user"
+                ? "bg-slate-800 ml-auto border-l-4 border-blue-500"
+                : "bg-gray-900 mr-auto border-l-4 border-amber-500 text-gray-200"
             }`}
           >
             {m.content}
@@ -247,11 +297,11 @@ export default function WebLLMChat() {
         ))}
       </div>
 
-      <div className="p-4 border-t border-gray-800 flex gap-2">
+      <div className="p-4 border-t border-gray-800 bg-gray-900 flex gap-2">
         <input
-          className="flex-1 bg-gray-900 border border-gray-700 px-3 py-2 rounded focus:outline-none focus:border-blue-500"
+          className="flex-1 bg-gray-950 border border-gray-700 px-4 py-3 rounded focus:outline-none focus:border-amber-500 text-lg"
           value={prompt}
-          placeholder="Ask something..."
+          placeholder="What do you do? (e.g. 'I cast fireball at the goblins')"
           onChange={(e) => setPrompt(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && sendMessage()}
         />
@@ -259,9 +309,9 @@ export default function WebLLMChat() {
           type="button"
           onClick={sendMessage}
           disabled={loading}
-          className="bg-blue-600 hover:bg-blue-500 px-4 py-2 rounded disabled:opacity-50 transition-colors"
+          className="bg-amber-600 hover:bg-amber-500 px-6 py-2 rounded font-bold disabled:opacity-50 transition-colors shadow-md text-black"
         >
-          Send
+          Roll
         </button>
       </div>
     </div>
