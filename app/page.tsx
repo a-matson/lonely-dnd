@@ -2,6 +2,7 @@
 
 import * as webllm from "@mlc-ai/web-llm";
 import { useEffect, useRef, useState } from "react";
+import MemoryManager from "../components/MemoryManager";
 import { generateLocalAvatar } from "../lib/avatar";
 import { getSlidingWindow, MAX_CONTEXT_TOKENS } from "../lib/budget";
 import {
@@ -18,7 +19,6 @@ import {
   getEmbedding,
   searchDocumentsHybrid,
 } from "../lib/rag";
-import MemoryManager from "../components/MemoryManager";
 
 export type Message = {
   role: "user" | "assistant" | "system";
@@ -34,9 +34,9 @@ const MODELS = [
     label: "Phi-3.5 Mini (Great for Story - Low VRAM)",
     value: "Phi-3.5-mini-instruct-q4f16_1-MLC",
   },
-  { 
-    label: "Hermes Llama (Uncensored)", 
-    value: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC" 
+  {
+    label: "Hermes Llama (Uncensored)",
+    value: "Hermes-3-Llama-3.1-8B-q4f16_1-MLC",
   },
   {
     label: "Qwen 2.5 3B (Best for Logic)",
@@ -66,7 +66,6 @@ export default function WebLLMChat() {
 
   const [isLoaded, setIsLoaded] = useState(false);
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-
 
   useEffect(() => {
     const savedChat = localStorage.getItem("lonely-dnd-chat");
@@ -163,7 +162,10 @@ export default function WebLLMChat() {
     setStatus("Analyzing intent...");
     let extractedData = { action: "", targets: [] as string[] };
     try {
-      extractedData = await extractEntitiesAndIntent(engineRef.current, userText);
+      extractedData = await extractEntitiesAndIntent(
+        engineRef.current,
+        userText,
+      );
       console.log("Extracted Intent:", extractedData);
     } catch {
       console.warn("Extraction failed, proceeding with raw query");
@@ -274,10 +276,16 @@ export default function WebLLMChat() {
         suggested_actions: {
           type: "array",
           items: { type: "string" },
-          description: "Provide exactly of at least 3 distinc possible, one-sentence actions the player could choose to take next based on this new outcome.",
-        }
+          description:
+            "Provide exactly of at least 3 distinc possible, one-sentence actions the player could choose to take next based on this new outcome.",
+        },
       },
-      required: ["identified_constraints", "logic_outcome", "new_game_state", "suggested_actions"],
+      required: [
+        "identified_constraints",
+        "logic_outcome",
+        "new_game_state",
+        "suggested_actions",
+      ],
     };
 
     try {
@@ -295,21 +303,21 @@ export default function WebLLMChat() {
       `;
 
       const logicResponse = await engineRef.current.chat.completions.create({
-          messages: [
-            {
-              role: "system",
-              content:
-                "You strictly output JSON representing game mechanics and state changes. Think step-by-step. Keep all text fields extremely brief and concise (1-2 sentences max). DO NOT write a story. DO NOT repeat the context back to me.",
-            },
-            { role: "user", content: logicPrompt },
-          ],
-          temperature: 0.1,
-          max_tokens: 1000,
-          response_format: {
-            type: "json_object",
-            schema: JSON.stringify(logicSchema),
+        messages: [
+          {
+            role: "system",
+            content:
+              "You strictly output JSON representing game mechanics and state changes. Think step-by-step. Keep all text fields extremely brief and concise (1-2 sentences max). DO NOT write a story. DO NOT repeat the context back to me.",
           },
-        });
+          { role: "user", content: logicPrompt },
+        ],
+        temperature: 0.1,
+        max_tokens: 1000,
+        response_format: {
+          type: "json_object",
+          schema: JSON.stringify(logicSchema),
+        },
+      });
 
       const rawContent = logicResponse.choices[0].message.content || "{}";
       let parsedLogic: any = {};
@@ -326,7 +334,10 @@ export default function WebLLMChat() {
       }
 
       // save the suggested actions to state
-      if (parsedLogic.suggested_actions && Array.isArray(parsedLogic.suggested_actions)) {
+      if (
+        parsedLogic.suggested_actions &&
+        Array.isArray(parsedLogic.suggested_actions)
+      ) {
         setSuggestedActions(parsedLogic.suggested_actions);
       }
 
@@ -468,11 +479,7 @@ export default function WebLLMChat() {
         });
       }
       setStatus("Extracting narrative facts...");
-      await extractAndStoreFacts(
-        engineRef.current,
-        userText,
-        assistantText,
-      );
+      await extractAndStoreFacts(engineRef.current, userText, assistantText);
       setStatus("Both engines ready! Awaiting your next move.");
     } catch (err) {
       console.error(err);
@@ -488,7 +495,7 @@ export default function WebLLMChat() {
           <p className="text-xs text-gray-400">Powered by Dual-Engine WebLLM</p>
         </div>
 
-       <div className="flex gap-2 items-center">
+        <div className="flex gap-2 items-center">
           <button
             type="button"
             onClick={() => setIsMenuOpen(true)}
@@ -505,16 +512,20 @@ export default function WebLLMChat() {
           </button>
 
           <div className="flex gap-1 hidden md:flex items-center">
-            <select 
-              className="bg-gray-900 border border-gray-700 px-2 py-1 rounded text-xs" 
-              value={selectedModel} 
+            <select
+              className="bg-gray-900 border border-gray-700 px-2 py-1 rounded text-xs"
+              value={selectedModel}
               onChange={(e) => setSelectedModel(e.target.value)}
             >
-              {MODELS.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              {MODELS.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
             </select>
-            <button 
-              type="button" 
-              onClick={() => initEngine(selectedModel)} 
+            <button
+              type="button"
+              onClick={() => initEngine(selectedModel)}
               className="bg-gray-700 hover:bg-gray-600 px-3 py-1.5 rounded text-xs h-full"
             >
               Load Engine
@@ -544,20 +555,22 @@ export default function WebLLMChat() {
         ))}
       </div>
 
-      {suggestedActions.length > 0 && status === "Both engines ready! Awaiting your next move." && (
-        <div className="px-4 py-2 flex flex-wrap gap-2 bg-gray-950">
-          {suggestedActions.map((action, idx) => (
-            <button
-              key={idx}
-              type="button"
-              onClick={() => setPrompt(action)}
-              className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 px-4 py-2 rounded-full text-sm transition-colors text-left shadow-sm"
-            >
-              {action}
-            </button>
-          ))}
-        </div>
-      )}
+      {suggestedActions.length > 0 &&
+        status === "Both engines ready! Awaiting your next move." && (
+          <div className="px-4 py-2 flex flex-wrap gap-2 bg-gray-950">
+            {suggestedActions.map((action, idx) => (
+              <button
+                // biome-ignore lint/suspicious/noArrayIndexKey: not needed
+                key={idx}
+                type="button"
+                onClick={() => setPrompt(action)}
+                className="bg-slate-800 hover:bg-slate-700 text-amber-400 border border-slate-700 px-4 py-2 rounded-full text-sm transition-colors text-left shadow-sm"
+              >
+                {action}
+              </button>
+            ))}
+          </div>
+        )}
 
       <div className="p-4 border-t border-gray-800 bg-gray-900 flex gap-2">
         <button

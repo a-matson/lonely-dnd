@@ -207,7 +207,9 @@ export async function retrieveRelevantMemory(
   };
 }
 
-export async function getAllMemories(type: "episodic" | "semantic"): Promise<MemoryChunk[]> {
+export async function getAllMemories(
+  type: "episodic" | "semantic",
+): Promise<MemoryChunk[]> {
   const db = await initMemoryDB();
   return await db.getAll(type);
 }
@@ -217,7 +219,11 @@ export async function deleteMemory(type: "episodic" | "semantic", id: string) {
   await db.delete(type, id);
 }
 
-export async function updateMemory(type: "episodic" | "semantic", id: string, newText: string) {
+export async function updateMemory(
+  type: "episodic" | "semantic",
+  id: string,
+  newText: string,
+) {
   const db = await initMemoryDB();
   const memory = await db.get(type, id);
   if (memory) {
